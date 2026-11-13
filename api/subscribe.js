@@ -1,5 +1,5 @@
 // Vercel serverless function — adds an email to the Shopify customer list.
-// Server-to-server, so Shopify's CAPTCHA never applies.
+// Server-to-server (no CAPTCHA). Token via client-credentials (form-encoded).
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -10,41 +10,52 @@ export default async function handler(req, res) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     email = String(body.email || '').trim();
   } catch (_) { email = ''; }
-
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'Invalid email' });
   }
 
-  const STORE  = process.env.SHOPIFY_STORE;          // e6e874-2.myshopify.com
+  const STORE  = process.env.SHOPIFY_STORE;
   const CID    = process.env.SHOPIFY_CLIENT_ID;
   const SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-
   if (!STORE || !CID || !SECRET) {
     return res.status(500).json({ error: 'Missing server config' });
   }
 
+  // read any response safely — return raw text if it isn't JSON
+  async function readResp(r) {
+    const t = await r.text();
+    try { return { ok: r.ok, status: r.status, data: JSON.parse(t) }; }
+    catch (_) { return { ok: r.ok, status: r.status, data: null, raw: t.slice(0, 300) }; }
+  }
+
   try {
-    // 1) get an Admin API token (client-credentials grant, same-org custom app)
+    // 1) token — MUST be form-encoded for Shopify
+    const form = new URLSearchParams();
+    form.set('grant_type', 'client_credentials');
+    form.set('client_id', CID);
+    form.set('client_secret', SECRET);
+
     const tokRes = await fetch(`https://${STORE}/admin/oauth/access_token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: CID,
-        client_secret: SECRET,
-        grant_type: 'client_credentials'
-      })
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      body: form.toString()
     });
-    const tok = await tokRes.json();
-    if (!tok.access_token) {
-      return res.status(502).json({ error: 'Auth failed', detail: tok });
+    const tok = await readResp(tokRes);
+    if (!tok.ok || !tok.data || !tok.data.access_token) {
+      return res.status(502).json({ error: 'Auth failed', status: tok.status, detail: tok.data || tok.raw });
     }
+    const token = tok.data.access_token;
 
-    // 2) create the customer, subscribed, tagged by source
+    // 2) create customer, subscribed, tagged
     const cRes = await fetch(`https://${STORE}/admin/api/2025-10/customers.json`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': tok.access_token
+        'X-Shopify-Access-Token': token,
+        'Accept': 'application/json'
       },
       body: JSON.stringify({
         customer: {
@@ -54,15 +65,12 @@ export default async function handler(req, res) {
         }
       })
     });
-    const cData = await cRes.json();
-
-    if (cRes.ok) return res.status(200).json({ ok: true });
-
-    // already on the list → still a success for the visitor
-    if (cRes.status === 422 && JSON.stringify(cData).toLowerCase().includes('taken')) {
+    const cust = await readResp(cRes);
+    if (cust.ok) return res.status(200).json({ ok: true });
+    if (cust.status === 422 && JSON.stringify(cust.data || '').toLowerCase().includes('taken')) {
       return res.status(200).json({ ok: true, existing: true });
     }
-    return res.status(502).json({ error: 'Create failed', detail: cData });
+    return res.status(502).json({ error: 'Create failed', status: cust.status, detail: cust.data || cust.raw });
   } catch (e) {
     return res.status(500).json({ error: 'Server error', detail: String(e) });
   }
