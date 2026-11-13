@@ -162,22 +162,38 @@ body {
 <p class="tagline" style="font-weight:700; color: var(--white); animation-delay: 3.0s;">Own the moment.</p>
 <p class="body" style="font-size:0.85rem; margin-bottom:16px; animation-delay: 3.2s;">Drops are limited. Get first access to the next one.</p>
 
-<form class="optin" action="https://e6e874-2.myshopify.com/contact" method="post">
-  <input type="hidden" name="form_type" value="customer">
-  <input type="hidden" name="utf8" value="✓">
-  <input type="hidden" name="contact[tags]" value="newsletter, pocketmountz-splash">
-  <input id="email" type="email" name="contact[email]" placeholder="your@email.com" required>
+<form class="optin" id="signup">
+  <input id="email" type="email" placeholder="your@email.com" required>
   <button type="submit">Get First Access</button>
 </form>
 <p id="thanks" class="thanks" hidden>You’re on the list.</p>
+<p id="err" class="thanks" hidden style="color:#c76">Hmm — that didn’t go through. Try again.</p>
 
 <script>
-function afterSubmit() {
-  setTimeout(function () {
-    var f = document.querySelector('.optin'); if (f) f.hidden = true;
-    var t = document.getElementById('thanks'); if (t) t.hidden = false;
-  }, 400);
-}
+document.getElementById('signup').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var email = document.getElementById('email').value.trim();
+  var btn = this.querySelector('button');
+  document.getElementById('err').hidden = true;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    var r = await fetch('/api/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email })
+    });
+    if (r.ok) {
+      document.querySelector('.optin').hidden = true;
+      document.getElementById('thanks').hidden = false;
+    } else {
+      btn.disabled = false; btn.textContent = 'Get First Access';
+      document.getElementById('err').hidden = false;
+    }
+  } catch (_) {
+    btn.disabled = false; btn.textContent = 'Get First Access';
+    document.getElementById('err').hidden = false;
+  }
+});
 </script>
 </body>
 </html>
